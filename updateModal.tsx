@@ -1,19 +1,15 @@
-import { openModal, Modal } from "@webpack/common";
+import { openModal, closeModal, Modal } from "@webpack/common";
 
-/**
- * Open a modal telling the user a new version is available.
- * If they click Yes, the update process is run (clone + build).
- * If Cancel, the modal just closes.
- */
 export function openUpdateModal(
     version: string,
     changelog: string,
-    onYes: () => void
+    onYes: () => void,
+    isDowngrade: boolean
 ) {
     openModal(modalProps =>
         <Modal
             {...modalProps}
-            title="New version detected!"
+            title={isDowngrade ? "Downgrade detected!" : "New version detected!"}
             size="sm"
             actions={[
                 {
@@ -33,7 +29,7 @@ export function openUpdateModal(
                 }
             ]}
         >
-            <div style={{ marginBottom: 16, color: "var(--text-positive)" }}>
+            <div style={{ marginBottom: 16, color: isDowngrade ? "var(--text-warning)" : "var(--text-positive)" }}>
                 <strong>Version {version}</strong>
             </div>
 
@@ -47,17 +43,16 @@ export function openUpdateModal(
             )}
 
             <div style={{ color: "var(--text-muted)" }}>
-                Would you like to install the update now?
+                {isDowngrade
+                    ? "Would you like to revert to this version?"
+                    : "Would you like to install the update now?"}
             </div>
         </Modal>
     );
 }
 
-/**
- * Open a modal telling the user an update is being installed.
- */
-export function openInstallingModal() {
-    openModal(modalProps =>
+export function openInstallingModal(): string {
+    return openModal(modalProps =>
         <Modal
             {...modalProps}
             title="Installing Update"
@@ -65,16 +60,13 @@ export function openInstallingModal() {
             actions={[]}
         >
             <div style={{ color: "var(--text-muted)" }}>
-                Cloning repository and building… Discord will need to be restarted when complete.
+                Cloning repository and building…
             </div>
         </Modal>
     );
 }
 
-/**
- * Open a modal telling the user the update was installed.
- */
-export function openRestartModal() {
+export function openRestartPrompt() {
     openModal(modalProps =>
         <Modal
             {...modalProps}
@@ -82,24 +74,32 @@ export function openRestartModal() {
             size="sm"
             actions={[
                 {
-                    text: "OK",
+                    text: "Yes",
                     variant: "primary",
+                    onClick() {
+                        modalProps.onClose();
+                        VencordNative.pluginHelpers.BulkDelete.restartDiscord();
+                    }
+                },
+                {
+                    text: "Cancel",
+                    variant: "secondary",
                     onClick() {
                         modalProps.onClose();
                     }
                 }
             ]}
         >
+            <div style={{ color: "var(--text-positive)", marginBottom: 16 }}>
+                <strong>Update installed successfully!</strong>
+            </div>
             <div style={{ color: "var(--text-muted)" }}>
-                The update has been installed. Please restart Discord for the changes to take effect.
+                Would you like to restart Discord now?
             </div>
         </Modal>
     );
 }
 
-/**
- * Open a modal telling the user an error occurred.
- */
 export function openErrorModal(error: string) {
     openModal(modalProps =>
         <Modal

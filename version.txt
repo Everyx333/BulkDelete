@@ -1,2 +1,2 @@
-1.2
-Added auto updates!
+1.4
+Auto-update improvements: downgrade support, restart prompt, proper multi-segment version comparison.

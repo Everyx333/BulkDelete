@@ -2,24 +2,34 @@
 * This file is made for auto updates!
 */
 import { execFile } from "child_process";
-import { IpcMainInvokeEvent } from "electron";
+import { app, IpcMainInvokeEvent } from "electron";
+import { get as httpsGet } from "https";
 import { join } from "path";
 import { promisify } from "util";
 import { existsSync, rmSync, readFileSync } from "fs";
 
 const execFileAsync = promisify(execFile);
 
-/**
- * Vencord repo root — native.ts is compiled into dist/patcher.js,
- * so __dirname is dist/ and joining with ".." gives the repo root.
- */
 const VENCORD_SRC_DIR = join(__dirname, "..");
 const PLUGIN_DIR = join(VENCORD_SRC_DIR, "src", "userplugins", "bulkDelete");
 
-/**
- * Read the local version.txt file and return the version string (first line).
- * Returns null if the file doesn't exist or can't be read.
- */
+function sleep(ms: number) {
+    return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+async function rmDirSafe(dir: string, maxRetries = 5): Promise<void> {
+    for (let i = 0; i < maxRetries; i++) {
+        try {
+            rmSync(dir, { recursive: true, force: true });
+            return;
+        } catch (err: any) {
+            if (err.code !== "EBUSY" && err.code !== "EPERM") throw err;
+            if (i === maxRetries - 1) throw err;
+            await sleep(500 * (i + 1));
+        }
+    }
+}
+
 export async function getLocalVersion(_e: IpcMainInvokeEvent): Promise<string | null> {
     try {
         const versionPath = join(PLUGIN_DIR, "version.txt");
@@ -31,10 +41,6 @@ export async function getLocalVersion(_e: IpcMainInvokeEvent): Promise<string | 
     }
 }
 
-/**
- * Read the local version.txt and return everything after the first line
- * (the changelog for the current version).
- */
 export async function getLocalChangelog(_e: IpcMainInvokeEvent): Promise<string> {
     try {
         const versionPath = join(PLUGIN_DIR, "version.txt");
@@ -46,28 +52,46 @@ export async function getLocalChangelog(_e: IpcMainInvokeEvent): Promise<string>
     }
 }
 
-/**
- * Perform a full update:
- * 1. Remove the old plugin directory
- * 2. git clone the repo fresh
- * 3. Run the Vencord build script
- *
- * The user needs to restart Discord afterward for changes to take effect.
- */
-export async function updatePlugin(_e: IpcMainInvokeEvent): Promise<void> {
-    if (existsSync(PLUGIN_DIR)) {
-        rmSync(PLUGIN_DIR, { recursive: true, force: true });
-    }
+export async function fetchRemoteVersion(_e: IpcMainInvokeEvent): Promise<string | null> {
+    return new Promise((resolve) => {
+        httpsGet("https://raw.githubusercontent.com/Everyx333/BulkDelete/main/version.txt", (res) => {
+            if (res.statusCode !== 200) {
+                resolve(null);
+                return;
+            }
+            let data = "";
+            res.on("data", (chunk) => { data += chunk; });
+            res.on("end", () => resolve(data));
+        }).on("error", () => resolve(null));
+    });
+}
 
-    await execFileAsync("git", [
-        "clone",
-        "https://github.com/Everyx333/BulkDelete.git",
-        PLUGIN_DIR
-    ]);
+export async function updatePlugin(_e: IpcMainInvokeEvent): Promise<void> {
+    const gitDir = join(PLUGIN_DIR, ".git");
+    const isGitRepo = existsSync(gitDir);
+
+    if (isGitRepo) {
+        await execFileAsync("git", ["fetch", "origin", "main"], { cwd: PLUGIN_DIR });
+        await execFileAsync("git", ["reset", "--hard", "origin/main"], { cwd: PLUGIN_DIR });
+    } else {
+        if (existsSync(PLUGIN_DIR)) {
+            await rmDirSafe(PLUGIN_DIR);
+        }
+        await execFileAsync("git", [
+            "clone",
+            "https://github.com/Everyx333/BulkDelete.git",
+            PLUGIN_DIR
+        ]);
+    }
 
     await execFileAsync("node", [
         "--require",
         "./scripts/suppressExperimentalWarnings.js",
         "scripts/build/build.mjs"
     ], { cwd: VENCORD_SRC_DIR });
+}
+
+export async function restartDiscord(_e: IpcMainInvokeEvent): Promise<void> {
+    app.relaunch();
+    app.exit(0);
 }

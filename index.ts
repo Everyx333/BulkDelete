@@ -1,16 +1,3 @@
-/**
- * BulkDelete — Vencord plugin for mass-deleting your messages.
- *
- * Exposes two slash commands:
- *   /delMsg     — Simple deletion with text/attachment/date filters
- *   /delMsgLog  — Anti-logger deletion (overwrites message content before deleting)
- *
- * Architecture (no Discord client cache dependency):
- *   Slash command → parse filters → scanMessages (REST API pagination)
- *   → confirmModal (are you sure?) → deleteQueue (iterates queue)
- *   → rateLimiter (avoids 429s) → Discord REST API → completion message
- */
-
 import definePlugin, { PluginNative } from "@utils/types";
 import {
     ApplicationCommandInputType,
@@ -21,39 +8,32 @@ import { Devs } from "@utils/constants";
 import { definePluginSettings } from "@api/Settings";
 import { OptionType } from "@utils/types";
 
+import { closeModal } from "@webpack/common";
+
 import { scanMessages } from "./scanner";
 import { deleteQueue } from "./deleteQueue";
 import { openConfirmModal } from "./confirmModal";
-import { openUpdateModal, openInstallingModal, openRestartModal, openErrorModal } from "./updateModal";
+import { openUpdateModal, openInstallingModal, openRestartPrompt, openErrorModal } from "./updateModal";
 import { RateLimiter, deleteMessage, antiLogDeleteMessage } from "./rateLimiter";
 import { DeleteFilters } from "./types";
 import { formatTime } from "./utils";
 
-const Native = VencordNative.pluginHelpers.BulkDelete as PluginNative<typeof import("./native")>;
-
-function isNewerVersion(local: string, remote: string): boolean {
-    const l = local.split(".").map(Number);
-    const r = remote.split(".").map(Number);
-    for (let i = 0; i < Math.max(l.length, r.length); i++) {
-        const a = l[i] || 0;
-        const b = r[i] || 0;
-        if (b > a) return true;
-        if (b < a) return false;
-    }
-    return false;
+function getNative() {
+    return VencordNative.pluginHelpers.BulkDelete as PluginNative<typeof import("./native")>;
 }
 
-/**
- * Plugin settings accessible from Discord's settings UI.
- *
- * - blockMessage: Text that briefly replaces a message before deletion
- *   (only used by /delMsgLog to hide the original content from loggers)
- * - deleteInterval: Base delay between deletion steps (applies to both
- *   regular and anti-log deletion)
- * - showDetailedStats: Whether to include scan counts and timing in the result message
- * - easeRateLimits: When enabled, dynamically adjusts delay based on
- *   remaining rate limit budget using deleteInterval as the base
- */
+function compareVersions(a: string, b: string): number {
+    const sa = a.split(".").map(Number);
+    const sb = b.split(".").map(Number);
+    for (let i = 0; i < Math.max(sa.length, sb.length); i++) {
+        const va = sa[i] || 0;
+        const vb = sb[i] || 0;
+        if (va > vb) return 1;
+        if (va < vb) return -1;
+    }
+    return 0;
+}
+
 const settings = definePluginSettings({
     blockMessage: {
         type: OptionType.STRING,
@@ -79,12 +59,10 @@ const settings = definePluginSettings({
     }
 });
 
-/** Look up a slash command argument by its name */
 function getArg(args: any[], name: string) {
     return args.find(a => a.name === name)?.value;
 }
 
-/** Convert raw slash command arguments into a typed DeleteFilters object */
 function parseFilters(args: any[]): DeleteFilters {
     return {
         amount: Number(getArg(args, "amount")) || 1,
@@ -100,19 +78,6 @@ function parseFilters(args: any[]): DeleteFilters {
     };
 }
 
-/**
- * Core execution flow shared by both /delMsg and /delMsgLog.
- *
- * Runs entirely in the background so Discord's command input stays
- * responsive. The command handler returns immediately after calling this.
- *
- * Steps:
- * 1. Parse filters from command arguments
- * 2. Scan the channel via REST API (no client cache dependency)
- * 3. Show a confirmation modal (skipped in dry-run mode)
- * 4. Delete every message in the queue
- * 5. Send a completion message to the channel
- */
 async function executeDelete(args: any[], ctx: any, antiLog: boolean) {
     const filters = parseFilters(args);
     const dryrun = getArg(args, "dryrun") ?? false;
@@ -193,10 +158,6 @@ async function executeDelete(args: any[], ctx: any, antiLog: boolean) {
     sendBotMessage(ctx.channel.id, { content });
 }
 
-/**
- * Slash command option definitions shared by both commands.
- * Each option maps to a field in DeleteFilters.
- */
 const messageOptions = [
     {
         name: "amount",
@@ -295,31 +256,38 @@ export default definePlugin({
 
     async start() {
         try {
+            const Native = getNative();
+
             const localVersion = await Native.getLocalVersion();
             if (!localVersion) return;
 
-            const res = await fetch("https://raw.githubusercontent.com/Everyx333/BulkDelete/main/version.txt");
-            if (!res.ok) return;
+            const remoteFull = await Native.fetchRemoteVersion();
+            if (!remoteFull) return;
 
-            const remoteText = await res.text();
-            const lines = remoteText.trim().split("\n");
+            const lines = remoteFull.trim().split("\n");
             const remoteVersion = lines[0];
-            if (!remoteVersion || !isNewerVersion(localVersion, remoteVersion)) return;
+            if (!remoteVersion) return;
 
+            const cmp = compareVersions(localVersion, remoteVersion);
+            if (cmp === 0) return;
+
+            const isDowngrade = cmp > 0;
             const changelog = lines.slice(1).join("\n").trim();
 
             openUpdateModal(remoteVersion, changelog, async () => {
-                openInstallingModal();
+                const modalKey = openInstallingModal();
 
                 try {
                     await Native.updatePlugin();
-                    openRestartModal();
+                    closeModal(modalKey);
+                    openRestartPrompt();
                 } catch (err: any) {
+                    closeModal(modalKey);
                     openErrorModal(err?.message || String(err));
                 }
-            });
-        } catch {
-            // Version check failed silently — not critical
+            }, isDowngrade);
+        } catch (e) {
+            console.error("[BulkDelete] Version check failed:", e);
         }
     }
 });

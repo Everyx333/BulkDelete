@@ -16,6 +16,17 @@ Your contributions are welcome and appreciated.
 
 ## Changelog
 
+Version 1.4
+- Auto-update now supports downgrades (reverting to older versions)
+- Shows a "Restart Discord?" prompt after update with Yes/Cancel buttons
+- Previous "Installing" modal closes automatically before showing the restart prompt
+- Version comparison now supports any number of segments (1.2.3, 1.2.3.4, etc.)
+
+Version 1.3
+- Fixed CSP issue - version check now uses Node.js https from main process instead of renderer fetch
+- Added retry logic for EBUSY errors on Windows during update
+- Update in-place via git fetch + reset instead of delete + clone
+
 Version 1.2
 - Auto updates!
 
