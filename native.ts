@@ -1,3 +1,6 @@
+/**
+* This file is made for auto updates!
+*/
 import { execFile } from "child_process";
 import { IpcMainInvokeEvent } from "electron";
 import { join } from "path";
