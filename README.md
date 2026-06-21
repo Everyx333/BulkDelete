@@ -15,6 +15,10 @@ This project is fully open source. You are encouraged to:
 Your contributions are welcome and appreciated.
 
 ## Changelog
+
+Version 1.2
+- Auto updates!
+
 Version 1.1
 - Made estimated time more accurate.
 - Added rate limit easing(the closer you are to the rate limit the more it waits) in the plugin settings.
