@@ -11,7 +11,7 @@
  *   → rateLimiter (avoids 429s) → Discord REST API → completion message
  */
 
-import definePlugin from "@utils/types";
+import definePlugin, { PluginNative } from "@utils/types";
 import {
     ApplicationCommandInputType,
     ApplicationCommandOptionType,
@@ -24,9 +24,24 @@ import { OptionType } from "@utils/types";
 import { scanMessages } from "./scanner";
 import { deleteQueue } from "./deleteQueue";
 import { openConfirmModal } from "./confirmModal";
+import { openUpdateModal, openInstallingModal, openRestartModal, openErrorModal } from "./updateModal";
 import { RateLimiter, deleteMessage, antiLogDeleteMessage } from "./rateLimiter";
 import { DeleteFilters } from "./types";
 import { formatTime } from "./utils";
+
+const Native = VencordNative.pluginHelpers.BulkDelete as PluginNative<typeof import("./native")>;
+
+function isNewerVersion(local: string, remote: string): boolean {
+    const l = local.split(".").map(Number);
+    const r = remote.split(".").map(Number);
+    for (let i = 0; i < Math.max(l.length, r.length); i++) {
+        const a = l[i] || 0;
+        const b = r[i] || 0;
+        if (b > a) return true;
+        if (b < a) return false;
+    }
+    return false;
+}
 
 /**
  * Plugin settings accessible from Discord's settings UI.
@@ -276,5 +291,35 @@ export default definePlugin({
                 executeDelete(args, ctx, true).catch(console.error);
             }
         }
-    ]
+    ],
+
+    async start() {
+        try {
+            const localVersion = await Native.getLocalVersion();
+            if (!localVersion) return;
+
+            const res = await fetch("https://raw.githubusercontent.com/Everyx333/BulkDelete/main/version.txt");
+            if (!res.ok) return;
+
+            const remoteText = await res.text();
+            const lines = remoteText.trim().split("\n");
+            const remoteVersion = lines[0];
+            if (!remoteVersion || !isNewerVersion(localVersion, remoteVersion)) return;
+
+            const changelog = lines.slice(1).join("\n").trim();
+
+            openUpdateModal(remoteVersion, changelog, async () => {
+                openInstallingModal();
+
+                try {
+                    await Native.updatePlugin();
+                    openRestartModal();
+                } catch (err: any) {
+                    openErrorModal(err?.message || String(err));
+                }
+            });
+        } catch {
+            // Version check failed silently — not critical
+        }
+    }
 });
