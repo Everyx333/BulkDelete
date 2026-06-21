@@ -12,13 +12,40 @@ import { sleep } from "./utils";
 export class RateLimiter {
     private remaining = 50;
     private resetAt = Date.now() + 1000;
+    private easeRateLimits: boolean;
+    private baseDelay: number;
+
+    /**
+     * @param easeRateLimits - When true, adds a dynamic delay before every request
+     *   that grows exponentially as the rate limit budget shrinks.
+     *   Formula: baseDelay × 2^((50 - remaining) / 10), capped at 2s.
+     *   This prevents Discord's client from being overwhelmed (forced restart)
+     *   during large bulk deletions (1500+ messages).
+     * @param baseDelay - The base delay in milliseconds (taken from the
+     *   deleteInterval setting). Used as the starting point for the easing curve.
+     */
+    constructor(easeRateLimits = false, baseDelay = 50) {
+        this.easeRateLimits = easeRateLimits;
+        this.baseDelay = baseDelay;
+    }
 
     /**
      * If we're close to the rate limit (<= 2 remaining), wait
      * until the reset time before proceeding.
+     *
+     * When easeRateLimits is enabled, also adds a dynamic delay
+     * proportional to how much of the rate limit budget has been used:
+     * the less remaining, the longer the wait.
      */
     async waitIfNeeded() {
         const now = Date.now();
+
+        if (this.easeRateLimits) {
+            const ratio = Math.max(0, (50 - this.remaining) / 10);
+            const delay = Math.min(this.baseDelay * Math.pow(2, ratio), 2000);
+            if (delay > 0)
+                await sleep(delay);
+        }
 
         if (this.remaining <= 2) {
             const waitTime = Math.max(0, this.resetAt - now + 100);
@@ -71,7 +98,8 @@ export class RateLimiter {
 export async function deleteMessage(
     channelId: string,
     messageId: string,
-    limiter: RateLimiter
+    limiter: RateLimiter,
+    interval: number = 50
 ): Promise<boolean> {
     for (let retries = 0; retries < 3; retries++) {
         try {
@@ -82,6 +110,7 @@ export async function deleteMessage(
             });
 
             limiter.update(response.headers);
+            if (interval > 0) await sleep(interval);
             return true;
         } catch (error: any) {
             if (error?.status === 429) {

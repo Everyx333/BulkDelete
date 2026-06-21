@@ -33,18 +33,21 @@ import { formatTime } from "./utils";
  *
  * - blockMessage: Text that briefly replaces a message before deletion
  *   (only used by /delMsgLog to hide the original content from loggers)
- * - deleteInterval: Pause between anti-log steps (placeholder post, delete, delete)
+ * - deleteInterval: Base delay between deletion steps (applies to both
+ *   regular and anti-log deletion)
  * - showDetailedStats: Whether to include scan counts and timing in the result message
+ * - easeRateLimits: When enabled, dynamically adjusts delay based on
+ *   remaining rate limit budget using deleteInterval as the base
  */
 const settings = definePluginSettings({
     blockMessage: {
         type: OptionType.STRING,
         description: "Text to display when blocking message logs",
-        default: "message logging blocked with an anti-messagelogger plugin.",
+        default: "this plugin was made by everyx <3",
     },
     deleteInterval: {
         type: OptionType.NUMBER,
-        description: "Delay in milliseconds between anti-log steps",
+        description: "Delay between deletion steps (milliseconds)",
         default: 50,
         min: 10,
         max: 500
@@ -53,6 +56,11 @@ const settings = definePluginSettings({
         type: OptionType.BOOLEAN,
         description: "Show detailed statistics in notification",
         default: true
+    },
+    easeRateLimits: {
+        type: OptionType.BOOLEAN,
+        description: "Gradually slow down as the rate limit approaches (prevents Discord client from force-restarting on large deletes)",
+        default: false
     }
 });
 
@@ -80,6 +88,9 @@ function parseFilters(args: any[]): DeleteFilters {
 /**
  * Core execution flow shared by both /delMsg and /delMsgLog.
  *
+ * Runs entirely in the background so Discord's command input stays
+ * responsive. The command handler returns immediately after calling this.
+ *
  * Steps:
  * 1. Parse filters from command arguments
  * 2. Scan the channel via REST API (no client cache dependency)
@@ -98,6 +109,10 @@ async function executeDelete(args: any[], ctx: any, antiLog: boolean) {
 
     const channelId = ctx.channel.id;
 
+    sendBotMessage(ctx.channel.id, {
+        content: `Scanning for ${filters.amount} messages${dryrun ? " (dry run)" : ""}…`
+    });
+
     const result = await scanMessages(channelId, filters);
 
     if (result.queue.length === 0) {
@@ -107,12 +122,17 @@ async function executeDelete(args: any[], ctx: any, antiLog: boolean) {
         return;
     }
 
+    const interval = settings.store.deleteInterval || 50;
+    const total = result.queue.length;
+
     if (!dryrun) {
         const confirmed = await new Promise<boolean>(resolve => {
             openConfirmModal({
-                found: result.queue.length,
+                found: total,
                 scanned: result.scanned,
                 filters,
+                interval,
+                antiLog,
                 onConfirm: () => resolve(true),
                 onCancel: () => resolve(false),
             });
@@ -125,21 +145,20 @@ async function executeDelete(args: any[], ctx: any, antiLog: boolean) {
     }
 
     const startTime = Date.now();
-    const limiter = new RateLimiter();
-    const interval = settings.store.deleteInterval || 50;
+    const limiter = new RateLimiter(settings.store.easeRateLimits, interval);
     const blockMessage = settings.store.blockMessage;
 
     if (dryrun) {
         const elapsed = Date.now() - startTime;
         sendBotMessage(ctx.channel.id, {
-            content: `**DRY RUN Complete**\n• Would delete: ${result.queue.length} messages\n• Scanned: ${result.scanned}\n• Time: ${formatTime(elapsed)}`
+            content: `**DRY RUN Complete**\n• Would delete: ${total} messages\n• Scanned: ${result.scanned}\n• Time: ${formatTime(elapsed)}`
         });
         return;
     }
 
     const deleter = antiLog
         ? (msg: any) => antiLogDeleteMessage(channelId, msg.id, blockMessage, interval, limiter)
-        : (msg: any) => deleteMessage(channelId, msg.id, limiter);
+        : (msg: any) => deleteMessage(channelId, msg.id, limiter, interval);
 
     const stats = await deleteQueue(result.queue, deleter);
 
@@ -244,14 +263,18 @@ export default definePlugin({
             inputType: ApplicationCommandInputType.BUILT_IN,
             description: "Delete your messages with filters",
             options: messageOptions,
-            execute(args, ctx) { return executeDelete(args, ctx, false); }
+            execute(args, ctx) {
+                executeDelete(args, ctx, false).catch(console.error);
+            }
         },
         {
             name: "delMsgLog",
             inputType: ApplicationCommandInputType.BUILT_IN,
             description: "Delete your messages with anti-logging protection",
             options: messageOptions,
-            execute(args, ctx) { return executeDelete(args, ctx, true); }
+            execute(args, ctx) {
+                executeDelete(args, ctx, true).catch(console.error);
+            }
         }
     ]
 });

@@ -1,3 +1,4 @@
+## Star the repo to help me out <3
 
 ## Documentation
 
@@ -12,6 +13,13 @@ This project is fully open source. You are encouraged to:
 - Fork and modify for your own use
 
 Your contributions are welcome and appreciated.
+
+## Changelog
+Version 1.1
+- Made estimated time more accurate.
+- Added rate limit easing(the closer you are to the rate limit the more it waits) in the plugin settings.
+- Everything(anti log deletion, deletion, rate limit easing) now uses the interval in the plugin settings.
+- Stability improvments.
 
 ## Credits
 
